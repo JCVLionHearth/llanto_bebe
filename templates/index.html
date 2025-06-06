@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Clasificador de Llanto de Bebé</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .result { margin-top: 20px; }
+        #spectrogram { max-width: 100%; }
+    </style>
+</head>
+<body>
+    <h1>Clasificador de Llanto de Bebé</h1>
+    <p>Sube un archivo de audio (.wav) para predecir la causa del llanto.</p>
+    
+    <form id="uploadForm" enctype="multipart/form-data">
+        <input type="file" name="audio" accept=".wav" required>
+        <button type="submit">Predecir</button>
+    </form>
+    
+    <div class="result" id="result" style="display: none;">
+        <h3>Resultado:</h3>
+        <p>Predicción: <strong id="prediction"></strong> (Confianza: <span id="confidence"></span>)</p>
+        <img id="spectrogram" src="">
+    </div>
+
+    <script>
+        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData();
+            formData.append('audio', e.target.audio.files[0]);
+            
+            try {
+                const response = await fetch('/predict', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    document.getElementById('prediction').textContent = data.prediction;
+                    document.getElementById('confidence').textContent = data.confidence.toFixed(2);
+                    document.getElementById('spectrogram').src = `data:image/png;base64,${data.image}`;
+                    document.getElementById('result').style.display = 'block';
+                } else {
+                    alert(`Error: ${data.error}`);
+                }
+            } catch (error) {
+                alert('Error al procesar la solicitud');
+                console.error(error);
+            }
+        });
+    </script>
+</body>
+</html>

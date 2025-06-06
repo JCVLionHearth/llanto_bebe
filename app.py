@@ -1,5 +1,5 @@
-import streamlit as st
-import sounddevice as sd
+# app.py (versión Flask)
+from flask import Flask, render_template, request, jsonify
 import numpy as np
 import librosa
 import librosa.display
@@ -9,19 +9,16 @@ import os
 from scipy.io.wavfile import write
 import tempfile
 from PIL import Image
+import io
+import base64
+
+app = Flask(__name__)
 
 # Cargar el modelo entrenado
 modelo = tf.keras.models.load_model('modelo_entrenado/modelo_llanto_bebe.h5')
 
 # Etiquetas de las clases
 clases = ['Cansancio', 'Dolor', 'Hambre', 'Incomodidad']
-
-# Función para grabar audio
-def grabar_audio(duracion=5, fs=44100):
-    st.info(f"Grabando {duracion} segundos...")
-    audio = sd.rec(int(duracion * fs), samplerate=fs, channels=1)
-    sd.wait()
-    return audio, fs
 
 # Función para crear espectrograma desde el audio
 def crear_espectrograma(audio, fs):
@@ -38,14 +35,17 @@ def crear_espectrograma(audio, fs):
     librosa.display.specshow(S_DB, sr=sr, x_axis='time', y_axis='mel')
     plt.axis('off')
 
-    temp_img = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
-    plt.savefig(temp_img.name, bbox_inches='tight', pad_inches=0)
+    # Guardar en buffer en lugar de archivo temporal
+    img_buffer = io.BytesIO()
+    plt.savefig(img_buffer, format='png', bbox_inches='tight', pad_inches=0)
     plt.close()
-    return temp_img.name
+    img_buffer.seek(0)
+    
+    return img_buffer
 
-# Función para predecir a partir del espectrograma
-def predecir(espectrograma_path):
-    img = Image.open(espectrograma_path).convert('RGB')
+# Función para predecir
+def predecir(espectrograma_buffer):
+    img = Image.open(espectrograma_buffer).convert('RGB')
     img = img.resize((128, 128))
     img_array = np.array(img) / 255.0
     img_array = np.expand_dims(img_array, axis=0)
@@ -56,30 +56,39 @@ def predecir(espectrograma_path):
     confianza = float(prediccion[0][idx])
     return clase_predicha, confianza
 
-# Streamlit UI
-st.title("Clasificador de Llanto de Bebé")
-st.write("Este modelo predice la causa del llanto: Hambre, Dolor, Incomodidad o Cansancio.")
+@app.route('/', methods=['GET'])
+def index():
+    return render_template('index.html')
 
-opcion = st.selectbox("¿Cómo deseas ingresar el audio?", ["Grabar ahora", "Subir archivo .wav"])
-
-if opcion == "Grabar ahora":
-    if st.button("Grabar Audio"):
-        audio, fs = grabar_audio()
-        espectrograma_path = crear_espectrograma(audio, fs)
-        st.image(espectrograma_path, caption="Espectrograma generado", use_column_width=True)
-        clase, confianza = predecir(espectrograma_path)
-        st.success(f"Predicción: **{clase}** (Confianza: {confianza:.2f})")
-
-elif opcion == "Subir archivo .wav":
-    archivo_audio = st.file_uploader("Sube un archivo de audio (.wav)", type=["wav"])
-    if archivo_audio is not None:
-        temp_audio_path = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
-        temp_audio_path.write(archivo_audio.read())
-
-        y, sr = librosa.load(temp_audio_path.name, sr=None)
+@app.route('/predict', methods=['POST'])
+def predict():
+    if 'audio' not in request.files:
+        return jsonify({'error': 'No se subió ningún archivo'}), 400
+    
+    audio_file = request.files['audio']
+    if audio_file.filename == '':
+        return jsonify({'error': 'Nombre de archivo vacío'}), 400
+    
+    try:
+        # Leer el archivo de audio
+        y, sr = librosa.load(audio_file, sr=None)
         audio = np.expand_dims(y, axis=1)
+        
+        # Procesar
+        espectrograma_buffer = crear_espectrograma(audio, sr)
+        clase, confianza = predecir(espectrograma_buffer)
+        
+        # Convertir imagen a base64 para mostrarla
+        espectrograma_buffer.seek(0)
+        img_base64 = base64.b64encode(espectrograma_buffer.read()).decode('utf-8')
+        
+        return jsonify({
+            'prediction': clase,
+            'confidence': confianza,
+            'image': img_base64
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-        espectrograma_path = crear_espectrograma(audio, sr)
-        st.image(espectrograma_path, caption="Espectrograma generado", use_column_width=True)
-        clase, confianza = predecir(espectrograma_path)
-        st.success(f"Predicción: **{clase}** (Confianza: {confianza:.2f})")
+if __name__ == '__main__':
+    app.run(debug=True)
